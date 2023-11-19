@@ -66,7 +66,7 @@ from tkinter import filedialog
 # ----------------------------------------------------------------------------
 
 
-def load_files(fdir, fn, Nses, experiment_tag, dlc_tail, mode):  
+def load_files(fdir, fn, Nses, experiment_tag, dlc_tail):  
     # if Nses > 1, mind the rule of name.
     spike_times = np.load(fdir/fn/'spike_times.npy')
     spike_times = np.squeeze(spike_times)# delete that stupid dimension.
@@ -84,10 +84,11 @@ def load_files(fdir, fn, Nses, experiment_tag, dlc_tail, mode):
         dlch5 = pd.read_hdf(fdir/fn/(fn+dlc_tail))
         esync_timestamps = esync_timestamps_load
         dlc_files = dlch5
-        if mode == 'FrameState':                        # new FrameState recording mode for new cams.
+        frame_state = False
+        if 'FrameState' in experiment_tag:                        # new FrameState recording mode for new cams.
             frame_state = pd.read_csv(fdir/fn/(fn+'FrameState.csv'))
             vsync_temp = np.array(frame_state['SyncLED'], dtype='uint')
-        elif mode =='Bonsai':                            # for old files.
+        elif 'Bonsai' in experiment_tag:                            # for old files.
             vsync_csv = pd.read_csv(fdir/fn/(fn+'.csv'), names=[0,1,2])
             vsync_temp = np.array(vsync_csv.loc[:,1], dtype='uint')
         vsync = np.where((vsync_temp[1:] - vsync_temp[:-1]) ==1)[0]+1
@@ -115,7 +116,7 @@ def load_files(fdir, fn, Nses, experiment_tag, dlc_tail, mode):
             dlch5 = pd.read_hdf(fdir/fn/(i+dlc_tail))
             dlc_files.append(dlch5)
             if mode == 'FrameState':
-                frame_state = pd.read_csv(fdir/fn/(i+'FrameState.csv'))
+                frame_state = pd.read_csv(fdir/fn/(i+'FrameState.csv'))    #Try using this rule to name files.
                 vsync_temp = np.array(frame_state['SyncLED'], dtype='uint')
                 elif mode == 'Bonsai':
                 vsync_csv = pd.read_csv(fdir/fn/(i+'.csv'), names=[0,1,2])
@@ -149,20 +150,20 @@ def load_files(fdir, fn, Nses, experiment_tag, dlc_tail, mode):
             spike_temp = spike_temp[np.where(spike_temp > ses_e_end[i-1] + 100000)]
             timestamps.append(spike_temp)
             spike_clusters2.append(cluster_temp)
-        print(ses_e_end)
+        print('sessions ended at timestamps,', ses_e_end)
     else:        
         print('Nses must be a positive integer.')
         
     if 'signal_on' in experiment_tag:
-        return spike_clusters2, timestamps, clusters_quality, vsync, esync_timestamps, dlc_files, signal_on_timestamps
+        return spike_clusters2, timestamps, clusters_quality, vsync, esync_timestamps, dlc_files, frame_state, signal_on_timestamps
     else:
-        return spike_clusters2, timestamps, clusters_quality, vsync, esync_timestamps, dlc_files
+        return spike_clusters2, timestamps, clusters_quality, vsync, esync_timestamps, dlc_files, frame_state
     
 
 def sync_check(esync_timestamps, vsync, Nses, fontsize):    
     if Nses == 1:
         if np.size(vsync) != np.size(esync_timestamps):
-            print('N of E&V Syncs do not Equal!!! Problems with Sync!!!')
+            raise Exception('N of E&V Syncs do not Equal!!! Problems with Sync!!!')
         else:
             print('N of E&V Syncs equal. You may continue.')
             # plot for check.
@@ -185,7 +186,7 @@ def sync_check(esync_timestamps, vsync, Nses, fontsize):
         # legend?
         for i in range(Nses):
             if np.size(vsync[i]) != np.size(esync_timestamps[i]):
-                print('N of E&V Syncs do not Equal!!! Problems with Sync in ses ', str(i), '!!!')
+                raise Exception('N of E&V Syncs do not Equal!!! Problems with Sync in ses ', str(i), '!!!')
             else:
                 print('ses ', str(i),' N of E&V Syncs equal. You may continue.')
                 esync_inter = esync_timestamps[i][1:] - esync_timestamps[i][:-1]
@@ -194,10 +195,8 @@ def sync_check(esync_timestamps, vsync, Nses, fontsize):
                 ax2.hist(vsync_inter, bins = len(set(vsync_inter)), alpha=0.2)
 
 
-def sync_cut_apply_spd_mask_20msbin(spike_clusters, timestamps, ses, esync_timestamps, sync_rate, experiment_tag, temporal_bin_length=0.02):
-    
+def sync_cut_stamps2time(spike_clusters, timestamps, ses, esync_timestamps, sync_rate, experiment_tag):
     # head&tail cut here, then transform into frame_id for spd_mask.
-    # applying spd_mask means sort spikes into running and staying.
     spike_clusters = np.delete(spike_clusters, np.where(timestamps > esync_timestamps[-1])[0])
     spike_clusters = np.delete(spike_clusters, np.where(timestamps < esync_timestamps[0])[0])
     timestamps = np.delete(timestamps, np.where(timestamps > esync_timestamps[-1])[0])
@@ -206,8 +205,11 @@ def sync_cut_apply_spd_mask_20msbin(spike_clusters, timestamps, ses, esync_times
     interp_y = np.linspace(0, (np.size(esync_timestamps)-1)/sync_rate, num=np.size(esync_timestamps))
     stamps2time_interp = interpolate.UnivariateSpline(esync_timestamps, interp_y, k=1, s=0)
     spiketime = stamps2time_interp(timestamps)
-        
-    if 'spatial' in experiment_tag:
+    return (spike_clusters,timestamps,spiketime)
+    
+def apply_spd_mask_20msbin(spike_clusters, timestamps, spiketime, ses, temporal_bin_length=0.02)
+    # applying spd_mask means sort spikes into running and staying.
+    # if 'spatial' in experiment_tag:
         spiketime_bin_id = (spiketime/temporal_bin_length).astype('uint')
         spike_spd_id = ses.spd_mask[spiketime_bin_id]
         high_spd_id = np.where(spike_spd_id==1)[0]
@@ -219,10 +221,8 @@ def sync_cut_apply_spd_mask_20msbin(spike_clusters, timestamps, ses, esync_times
         spike_clusters = spike_clusters[high_spd_id]
         timestamps = timestamps[high_spd_id]
         spiketime = spiketime[high_spd_id]
-
         return (spike_clusters,timestamps,spiketime, spike_clusters_stay,timestamps_stay,spiketime_stay)
-    else:
-        return (spike_clusters,timestamps,spiketime)
+        
 
 def signal_stamps2time(esync_timestamps, signal_on_timestamps, Nses, sync_rate):
     if Nses == 1:
@@ -240,7 +240,7 @@ def signal_stamps2time(esync_timestamps, signal_on_timestamps, Nses, sync_rate):
                 stamps2time_interp = interpolate.UnivariateSpline(esync_timestamps[i], interp_y, k=1, s=0)
                 signal_on_time.append(stamps2time_interp(signal_on_timestamps[i]))
             else:
-                pass
+                signal_on_time.append(np.array([]))
     return signal_on_time
 
 
@@ -420,31 +420,54 @@ def Kalman_filter_2d():#interpreted from Bohua's code.
 class Session(object):    
     def __init__(self, dlch5, dlc_col_ind_dict, vsync, sync_rate, experiment_tag,
                  ses_id=0, fontsize=15):
-        # docstring?
-        
-        self.left_pos = np.vstack((np.array(dlch5[dlch5.columns[dlc_col_ind_dict['left_pos']]]), np.array(dlch5[dlch5.columns[dlc_col_ind_dict['left_pos']+1]]))).T
-        self.right_pos = np.vstack((np.array(dlch5[dlch5.columns[dlc_col_ind_dict['right_pos']]]), np.array(dlch5[dlch5.columns[dlc_col_ind_dict['right_pos']+1]]))).T            
+        # docstring?           
         self.id = ses_id
         self.vsync = vsync
         self.experiment_tag = experiment_tag
         self.sync_rate = sync_rate
         self.fontsize = fontsize
         self.pixpcm = 0
-        for key,value in dlc_col_ind_dict.items():# for extensive need from DLC. Presently a basic attribution.
-            if key != 'left_pos' and key != 'right_pos':
-                exec('self.'+key+'=np.vstack((np.array(dlch5[dlch5.columns[dlc_col_ind_dict['+str(value)+']]]), np.array(dlch5[dlch5.columns[dlc_col_ind_dict['+str(value)+']+1]]))).T')
+        self.cut = False
+        if 'Bonsai' in self.experiment_tag:
+            self.left_pos = np.vstack((np.array(dlch5[dlch5.columns[dlc_col_ind_dict['left_pos']]]), np.array(dlch5[dlch5.columns[dlc_col_ind_dict['left_pos']+1]]))).T
+            self.right_pos = np.vstack((np.array(dlch5[dlch5.columns[dlc_col_ind_dict['right_pos']]]), np.array(dlch5[dlch5.columns[dlc_col_ind_dict['right_pos']+1]]))).T 
+        elif 'FrameState' in self.experiment_tag:
+            dlcmodelstr=dlch5.columns[1][0]
+            for key in dlc_col_ind_dict:# for customized need from DLC.
+                pos_for_key = np.vstack((np.array(dlch5[(dlcmodelstr,key,'x')]), np.array(dlch5[(dlcmodelstr,key,'y')]))).T    
+                setattr(self, key, pos_for_key)
+            for key in frame_state.columns:
+                setattr(self, key, np.array(frame_state[key]).T)
+            self.raw_frame_length = (getattr(self, 'Frame')).shape[0]       #mark down the total frame length of raw video, for sync cut
                 
 
     def sync_cut_generate_frame_time(self):
-        print('sync_cut of Session should only run for once, otherwise you need to reload files. So far, it only works on left and right pos.')
-        self.left_pos = self.left_pos[self.vsync[0]:self.vsync[-1]+1, :]
-        self.right_pos = self.right_pos[self.vsync[0]:self.vsync[-1]+1, :]
-        #assign time values for frames. So far for a single ses, single video.
-        frame2time_interp = interpolate.UnivariateSpline(self.vsync-self.vsync[0], np.linspace(0, (np.size(self.vsync)-1)/self.sync_rate, num=np.size(self.vsync)),
-                                                         k=1, s=0)
-        self.frame_time = frame2time_interp(np.arange(self.left_pos.shape[0])).astype('float64')
-        self.total_time = self.frame_time[-1]
-    
+        if 'Bonsai' in self.experiment_tag:
+            if self.cut == False:
+                self.left_pos = self.left_pos[self.vsync[0]:self.vsync[-1]+1, :]
+                self.right_pos = self.right_pos[self.vsync[0]:self.vsync[-1]+1, :]
+                #assign time values for frames. So far for a single ses, single video.
+                frame2time_interp = interpolate.UnivariateSpline(self.vsync-self.vsync[0], np.linspace(0, (np.size(self.vsync)-1)/self.sync_rate, num=np.size(self.vsync)),
+                                                                 k=1, s=0)
+                self.frame_time = frame2time_interp(np.arange(self.left_pos.shape[0])).astype('float64')
+                self.total_time = self.frame_time[-1]
+                self.cut = True:
+            else:
+                print('Has already being sync_cut, noway to do a second time.')
+        elif 'FrameState' in experiment_tag:
+            for key in vars(self):
+                FrameData = getattr(self, key)
+                if hasattr(FrameData, 'shape') and FrameData.shape[0] == self.raw_frame_length:           #if the data length quals to raw video's , it needs sync cut head tail 
+                    FrameData = FrameData[self.vsync[0]:self.vsync[-1]+1]
+                    setattr(self, key, FrameData)
+            self.frame_length = len(self.Frame)
+            frame2time_interp = interpolate.UnivariateSpline(self.vsync-self.vsync[0], np.linspace(0, (np.size(self.vsync)-1)/self.sync_rate, num=np.size(self.vsync)),k=1, s=0)
+            self.frame_time = frame2time_interp(np.arange(self.framelength)).astype('float64')
+            self.total_time = self.frame_time[-1]
+        else:
+            raise Exception('Please choose your V_recording mode.')
+            
+
     def remove_nan_merge_pos_get_hd(self):        
         nan_id = np.isnan(self.left_pos) + np.isnan(self.right_pos)
         nan_id = nan_id[:,0] + nan_id[:,1]
@@ -498,12 +521,81 @@ class Session(object):
 # -----------------------------------------------------------------------------
 #                 Derived Classes from Session
 # -----------------------------------------------------------------------------
+class DetourSession(Session):
+    def __init__(self, dlch5, dlc_col_ind_dict, frame_state, vsync, sync_rate, expriment_tag, ses_id=0, fontsize=15):
+        Session.__init__(self, dlch5, dlc_col_ind_dict, vsync, sync_rate, experiment_tag, ses_id, fontsize)
+                
+def generate_interpolater(self):
+    time2frame = interpolate.interp1d(self.frametime, np.linspace(0, (np.size(self.frametime)-1),num=np.size(self.frametime)), kind='nearest')
+    self.get = {'time2frame':time2frame }
+    
+    def time2index(spiketime):
+        frame_id = self.get['time2frame'](spiketime)
+        return int(frame_id)
+    def generate_index_func(obj, key):
+        def FUNC(spiketime):
+            return getattr(obj, key)[time2index(spiketime)]
+        return FUNC
+    def generate_mergeXY_func(obj, key):
+        def FUNC(spiketime):
+            return [obj.get[key+'X'](spiketime),obj.get[key+'Y'](spiketime)]
+        return FUNC
+                
+    for key in vars(self):
+        FrameData = getattr(self, key)
+        if hasattr(FrameData, 'shape') and FrameData.shape[0] == self.frame_length:
+            if type(FrameData[0]) == np.bool_ :                             #如果是bool值，那么在进行插值的时候应该取最邻近的值，而且bool值可以被数字比大小，所以单独写一个分支
+                 self.get[key] = generate_index_func(self, key) 
+            elif type(FrameData[0]) == str :                                #如果是字符串，那么在进行插值的时候应该取最邻近的值
+                self.get[key] = generate_index_func(self, key) 
+            elif type(FrameData[0]) == np.ndarray :                         #如果是一个数组，那意味着选到了某个位置（x，y），所以分别对x，y做插值，输出一个（x，y）
+                self.get[key+'X'] = interpolate.UnivariateSpline(self.frametime, FrameData[:,0])
+                self.get[key+'Y'] = interpolate.UnivariateSpline(self.frametime, FrameData[:,1])
+                self.get[key] = generate_mergeXY_func(self, key) 
+            elif FrameData[0] >= 0:                                         #如果是一个数字
+                self.get[key] = interpolate.UnivariateSpline(self.frametime, FrameData)
+            else:
+                raise Exception('Error in generating interpolater, value type not defined')
+            
+    
+def slowget(self, key, spiketime):
+    ValueSet = getattr(self, key)
+        
+    if type(ValueSet[0]) == np.bool_ :        #如果是bool值，那么在进行插值的时候应该取最邻近的值，而且bool值可以被数字比大小，所以单独写一个分支
+        Interpolater = interpolate.interp1d(self.frametime, ValueSet, kind='previous')
+        ValueAtTime = Interpolater(spiketime)
+        return ValueAtTime
+        
+    elif type(ValueSet[0]) == str :           #如果是字符串，那么在进行插值的时候应该取最邻近的值
+        Interpolater = interpolate.UnivariateSpline(self.frametime, ValueSet)
+        ValueAtTime = Interpolater(spiketime)
+        return ValueAtTime
+        
+    elif type(ValueSet[0]) == np.ndarray :    #如果是一个数组，那意味着选到了某个位置（x，y），所以分别对x，y做插值，输出一个（x，y）
+        InterpolaterX = interpolate.UnivariateSpline(self.frametime, ValueSet[:,0])
+        InterpolaterY = interpolate.UnivariateSpline(self.frametime, ValueSet[:,1])
+        ValueAtTime = [InterpolaterX(spiketime),InterpolaterY(spiketime)]
+        return ValueAtTime
+        
+    elif ValueSet[0] >=0 :              #如果是一个数字
+        Interpolater = interpolate.UnivariateSpline(self.frametime, ValueSet)
+        ValueAtTime = Interpolater(spiketime)
+        return ValueAtTime        
+    else:
+        raise Exception('You acquired wrong variable')
+
+
+
+
+
+
+
 
 class DRsession(Session):
     def __init__(self, dlch5, dlc_col_ind_dict, vsync, sync_rate, experiment_tag,
                  ses_id=0, fontsize=15):
-        super().__init__(self, dlch5, dlc_col_ind_dict, vsync, sync_rate, experiment_tag,
-                     ses_id=0, fontsize=15)
+        Session.__init__(self, dlch5, dlc_col_ind_dict, vsync, sync_rate, experiment_tag,
+                     ses_id, fontsize)
         if 'circular' in self.__experiment_tag:
             self.center = find_center_circular_track(np.vstack((self.left_pos, self.right_pos))[:,0], np.vstack((self.left_pos, self.right_pos))[:,1], fontsize=self.__fontsize)
             self.pixpcm = 2*self.center[1]/65
@@ -613,7 +705,7 @@ class Unit(object):
             self.stability = [0 for i in range(Nses)]
             self.global_mean_rate = [0 for i in range(Nses)]
             self.__running_mean_rate = [0 for i in range(Nses)]
-            self.is_place_cell = False
+            self.is_place_cell = [False for i in range(Nses)]
             # unpacking
             for i in range(Nses):
                 spike_pick_cluid = np.where(spike_pack[i][0] == self.cluid)[0]
@@ -671,30 +763,30 @@ class Unit(object):
             print('you might used wrong method.')
     
     
-    def raster_plot_peri_stimulus(self, ses, signal_on_time, pre_sec=30, post_sec=30, stim_color='yellow'):
-        fig = plt.figure(figsize=(5,5))
-        ax = fig.add_subplot(111)
-        ax.set_title('PSTH around laser-on, clu'+str(self.cluid), fontsize=self.fontsize*1.3)
-        ax.set_xlabel('Time in sec', fontsize=self.fontsize)
-        ax.set_xlim(left=-(pre_sec), right=post_sec)
-        ax.set_ylabel('Trials', fontsize=self.fontsize)
-        
-        if self.Nses == 1:
-            signal_on_temp = signal_on_time
-        else:
-            # signal_on_temp = signal_on_time[ses.id]
-            signal_on_temp = signal_on_time
-        ax.set_ylim(bottom=1, top=np.size(signal_on_temp)+1)
-        if 'spatial' in self.experiment_tag:
-            spike_time = np.concatenate((self.spiketime[ses.id], self.spiketime_stay[ses.id]))
-        else:
-            spike_time = self.spike_time
-        for i in range(np.size(signal_on_temp)):
-            spike_time_temp = spike_time[np.where(spike_time < (signal_on_temp[i] + post_sec))]
-            spike_time_temp = spike_time_temp[np.where(spike_time_temp > (signal_on_temp[i] - pre_sec))].astype('float64')
-            spike_time_temp = spike_time_temp - signal_on_temp[i]
-            ax.scatter(spike_time_temp, np.array([i+1]*np.size(spike_time_temp)).astype('uint16'), c='k', marker='|', s=40)
-        ax.fill_between([0, post_sec], 0, np.size(signal_on_temp)+1, facecolor=stim_color, alpha=0.5)
+   # def raster_plot_peri_stimulus(self, ses, signal_on_time, pre_sec=30, post_sec=30, stim_color='yellow'):
+    #    fig = plt.figure(figsize=(5,5))
+     #   ax = fig.add_subplot(111)
+      #  ax.set_title('PSTH around laser-on, clu'+str(self.cluid), fontsize=self.fontsize*1.3)
+       # ax.set_xlabel('Time in sec', fontsize=self.fontsize)
+       # ax.set_xlim(left=-(pre_sec), right=post_sec)
+        #ax.set_ylabel('Trials', fontsize=self.fontsize)
+        #
+        #if self.Nses == 1:
+         #   signal_on_temp = signal_on_time
+        #else:
+          #  # signal_on_temp = signal_on_time[ses.id]
+         #   signal_on_temp = signal_on_time
+        #ax.set_ylim(bottom=1, top=np.size(signal_on_temp)+1)
+        #if 'spatial' in self.experiment_tag:
+        #    spike_time = np.concatenate((self.spiketime[ses.id], self.spiketime_stay[ses.id]))
+       # else:
+       #     spike_time = self.spike_time
+       # for i in range(np.size(signal_on_temp)):
+       #     spike_time_temp = spike_time[np.where(spike_time < (signal_on_temp[i] + post_sec))]
+       #     spike_time_temp = spike_time_temp[np.where(spike_time_temp > (signal_on_temp[i] - pre_sec))].astype('float64')
+       #     spike_time_temp = spike_time_temp - signal_on_temp[i]
+       #     ax.scatter(spike_time_temp, np.array([i+1]*np.size(spike_time_temp)).astype('uint16'), c='k', marker='|', s=40)
+      #  ax.fill_between([0, post_sec], 0, np.size(signal_on_temp)+1, facecolor=stim_color, alpha=0.5)
    
          
     def opto_inhibitory_tagging(self, ses, signal_on_time, mode, p_threshold=0.01, laser_on_sec=30, laser_off_sec=30, shuffle_range_sec=30):
@@ -702,7 +794,7 @@ class Unit(object):
         if self.Nses == 1:
             signal_on_temp = signal_on_time
         else:
-            signal_on_temp = signal_on_time[0]# so far, emmm...
+            signal_on_temp = signal_on_time[ses.id]
         if 'spatial' in self.experiment_tag:
             spike_time = np.concatenate((self.spiketime[ses.id], self.spiketime_stay[ses.id]))
         else:
@@ -719,19 +811,18 @@ class Unit(object):
                 off_spk_count.append(np.size(spike_time_temp2))
             statistic, pvalue = stats.ranksums(on_spk_count, off_spk_count, alternative='less')
             if pvalue < p_threshold:
-                print('clu'+str(self.cluid), ' is positive, p-value', pvalue)
+                print('clu{} is positive, p-value'.format(self.cluid), pvalue)
                 self.opto_tag = 'positive'
             # emmm...how to deal with margitial?
             else:
-                print('clu'+str(self.cluid), ' is negative, p-value', pvalue)
+                print('clu{} is negative, p-value'.format(self.cluid), pvalue)
                 self.opto_tag = 'negative'
         elif mode == 'shuffle':
-            print('shuffle test is not finished yet')
+            raise Exception('shuffle test is not finished yet')
             # 1000times, 0.01
             pass            
         else:
-            print('Wrong mode or the mode has not been coded.')
-
+            raise Exception('Wrong mode or the mode has not been coded.')
 
     def plot_PSTH(self, ses):
         pass
@@ -930,25 +1021,32 @@ class Unit1DCircular(Unit):
                 self.rotational_correlation_peak = [np.where(rotational_corrcoef == np.max(rotational_corrcoef))[0][0]*bin_increment]
                 
     def plot_ratemap_and_rotational_corr(self, ses, nspatial_bins=360, bin_increment = 3,
+                                         mode = 'tagging',
                                          color_list=['k','b','grey','cyan','orange'],
                                          legend_list=['standard1', '90 degree conflict', 'standard2', '180 degree conflict', 'inhibitory tagging']):
-        fig = plt.figure(figsize=(18,7))
-        ax1 = fig.add_subplot(131, polar=True)
-        ax1.set_theta_direction('clockwise')
-        ax1.set_theta_offset(np.pi/2)
-        ax2 = fig.add_subplot(132)
+                                         signal_on_time=False, signal_on_ses=4, pre_sec=20, post_sec=20, stim_color='yellow'):
+        if mode == 'tagging':
+            subplots = 4
+        else:
+            subplots = 3
+        fig, axes = plt.subplots(1, subplots, figsize=(subplots*6,7), layout='constrained')
+        axes[0].set_axis_off()#HAHAHAHAHAHA EVIL CODING
+        axes[0] = fig.add_subplot(1, subplots, 1, projection='polar')
+        
+        fig.suptitle('ratemap in {0} sessions, clu{1}, {2}, {3}'.format(self.Nses, self.cluid, self.quality, self.type), fontsize=self.fontsize*1.2)
+        axes[0].set_title('spa. info ='+str([round(i,2) for i in self.spatial_info]), fontsize = self.fontsize*1.2)
+        axes[0].set_theta_direction('clockwise')
+        axes[0].set_theta_offset(np.pi/2)
         theta = np.linspace(0, 2*np.pi, num=nspatial_bins)
         for i in ses:
-            ax1.plot(theta, self.ratemap[i.id], c=color_list[i.id])
-            ax2.plot(self.ratemap[i.id], c=color_list[i.id])
-        ax1.legend(legend_list, fontsize=self.fontsize, loc='lower left')
-        ax1.set_title('ratemap in 5 sessions, clu'+str(self.cluid)+', '+str(self.quality), fontsize=self.fontsize*1.2)
-        ax2.set_title('spa. info ='+str([round(i,2) for i in self.spatial_info])+'\n pos. info ='+
-                      str([round(np.nanmax(i),2) for i in self.positional_info]), fontsize = self.fontsize*1.2)
-        ax1.set_xlabel('spatial bins in degree', fontsize=self.fontsize)
-        ax1.set_ylabel('firing rate', fontsize=self.fontsize)
-        ax2.set_xlabel('spatial bins', fontsize=self.fontsize)
-        ax2.set_ylabel('firing rate', fontsize=self.fontsize)
+            axes[0].plot(theta, self.ratemap[i.id], c=color_list[ses.index(i)])
+            axes[1].plot(self.ratemap[i.id], c=color_list[ses.index(i)])
+        axes[0].legend(legend_list, fontsize=self.fontsize, loc='lower left')
+        axes[1].set_title('pos. info ='+str([round(np.nanmax(i),2) for i in self.positional_info]), fontsize = self.fontsize*1.2)
+        axes[0].set_xlabel('spatial bins in degree', fontsize=self.fontsize)
+        axes[0].set_ylabel('firing rate', fontsize=self.fontsize)
+        axes[1].set_xlabel('spatial bins', fontsize=self.fontsize)
+        axes[2].set_ylabel('firing rate', fontsize=self.fontsize)
         
         
         rotational_corrcoef1 = [np.corrcoef(self.ratemap[ses[0].id], self.ratemap[ses[1].id])[0,1]]
@@ -961,12 +1059,11 @@ class Unit1DCircular(Unit):
         rotational_corrcoef1 = np.array(rotational_corrcoef1)
         rotational_corrcoef2 = np.array(rotational_corrcoef2)
 
-        ax3 = fig.add_subplot(133)
         x = np.linspace(0, 360, num=int(nspatial_bins/bin_increment), endpoint=False)
-        ax3.plot(x, rotational_corrcoef1, c='b')
-        ax3.plot(x, rotational_corrcoef2, c='cyan')
-        ax3.plot([180,180], [-0.2,1], linestyle='dashed', c='grey')
-        ax3.plot(x, [0.6]*np.size(x), c='red')
+        axes[2].plot(x, rotational_corrcoef1, c='b')
+        axes[2].plot(x, rotational_corrcoef2, c='cyan')
+        axes[2].plot([180,180], [-0.2,1], linestyle='dashed', c='grey')
+        axes[2].plot(x, [0.6]*np.size(x), c='red')
         # as in Knierim 2002 the criteria include peak corr greater than 0.75.
         # might be too high, try 2013 EC, 0.6
         self.rotational_correlation_peak = []
@@ -978,7 +1075,26 @@ class Unit1DCircular(Unit):
             self.rotational_correlation_peak.append(np.where(rotational_corrcoef2 == np.max(rotational_corrcoef2))[0][0]*bin_increment)
         else:
             self.rotational_correlation_peak.append(False)
-        ax3.set_title('rota. corr. of clu'+str(self.cluid)+' '+str(self.rotational_correlation_peak), fontsize=self.fontsize*1.2)
+        axes[2].set_title('rota. corr. of clu'+str(self.cluid)+' '+str(self.rotational_correlation_peak), fontsize=self.fontsize*1.2)
+        
+        if mode == 'tagging':
+            axes[3].set_title('PSTH around laser-on, '+self.opto_tag, fontsize=self.fontsize*1.3)
+            axes[3].set_xlabel('Time in sec', fontsize=self.fontsize)
+            axes[3].set_xlim(left=-(pre_sec), right=post_sec)
+            axes[3].set_ylabel('Trials', fontsize=self.fontsize)
+            signal_on_temp = signal_on_time[signal_on_ses-1]
+            axes[3].set_ylim(bottom=1, top=np.size(signal_on_temp)+1)
+            if 'spatial' in self.experiment_tag:
+                spike_time = np.concatenate((self.spiketime[signal_on_ses-1], self.spiketime_stay[signal_on_ses-1]))
+            else:
+                spike_time = self.spike_time[signal_on_ses-1]
+            for i in range(np.size(signal_on_temp)):
+                spike_time_temp = spike_time[np.where(spike_time < (signal_on_temp[i] + post_sec))]
+                spike_time_temp = spike_time_temp[np.where(spike_time_temp > (signal_on_temp[i] - pre_sec))].astype('float64')
+                spike_time_temp = spike_time_temp - signal_on_temp[i]
+                axes[3].scatter(spike_time_temp, np.array([i+1]*np.size(spike_time_temp)).astype('uint16'), c='k', marker='|', s=40)
+            axes[3].fill_between([0, post_sec], 0, np.size(signal_on_temp)+1, facecolor=stim_color, alpha=0.5)
+            fig.layout_engine = 'constrained'
         
         
         
