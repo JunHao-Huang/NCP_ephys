@@ -17,6 +17,8 @@ in other words, full trust was given to Maser8.
 Pros, reconstruted time by many interpolations(Scipy, UniviariateSpline) might be easy to use.
 Cons, we cannot know if Master8 is really good enough so time-related calculation might be wrong.
 
+20231119 merged codes from Mingze.
+
 
 
 '''
@@ -58,19 +60,13 @@ from scipy import optimize, ndimage, interpolate, stats
 from pathlib import Path
 from tkinter import filedialog
 
-# plt.rcparams[]
 
 # ----------------------------------------------------------------------------
 #                  Functions here
 # ----------------------------------------------------------------------------
 
-# 中文就中文吧...天宇他们的filename_tail未必是数字，这个简单，Loadfile这里写灵活一些就行。
-# 博华的建议，接口化，输入可以有若干个，但输入的规则由函数定义。这个怎么写还得继续学。
 
-
-
-
-def load_files(fdir, fn, Nses, experiment_tag, dlc_tail):  
+def load_files(fdir, fn, Nses, experiment_tag, dlc_tail, mode):  
     # if Nses > 1, mind the rule of name.
     spike_times = np.load(fdir/fn/'spike_times.npy')
     spike_times = np.squeeze(spike_times)# delete that stupid dimension.
@@ -80,17 +76,23 @@ def load_files(fdir, fn, Nses, experiment_tag, dlc_tail):
 
     if 'signal_on' in experiment_tag :
         signal_on_timestamps_load = np.load(fdir/fn/('Signal_on_timestamps_'+fn+'.npy')) 
-    
+
+
     if Nses == 1:
         timestamps = spike_times    
         spike_clusters2 = spike_clusters
         dlch5 = pd.read_hdf(fdir/fn/(fn+dlc_tail))
-        vsync_csv = pd.read_csv(fdir/fn/(fn+'.csv'), names=[0,1,2])
-        vsync_temp = np.array(vsync_csv.loc[:,1], dtype='uint')
-        vsync = np.where((vsync_temp[1:] - vsync_temp[:-1]) ==1)[0]
-        
         esync_timestamps = esync_timestamps_load
         dlc_files = dlch5
+        if mode == 'FrameState':                        # new FrameState recording mode for new cams.
+            frame_state = pd.read_csv(fdir/fn/(fn+'FrameState.csv'))
+            vsync_temp = np.array(frame_state['SyncLED'], dtype='uint')
+        elif mode =='Bonsai':                            # for old files.
+            vsync_csv = pd.read_csv(fdir/fn/(fn+'.csv'), names=[0,1,2])
+            vsync_temp = np.array(vsync_csv.loc[:,1], dtype='uint')
+        vsync = np.where((vsync_temp[1:] - vsync_temp[:-1]) ==1)[0]+1
+        else:
+            raise Exception('please choose the right mode for data loading.')
         if 'signal_on' in experiment_tag:
             signal_on_timestamps = signal_on_timestamps_load
     elif Nses > 1:
@@ -107,16 +109,21 @@ def load_files(fdir, fn, Nses, experiment_tag, dlc_tail):
         spike_clusters2 = []
         dlc_files = []
         vsync = []
+        frame_state = []
         # if others' dir rule is not like this, use absolute dir from askopenfilename.
         for i in filenames:
             dlch5 = pd.read_hdf(fdir/fn/(i+dlc_tail))
             dlc_files.append(dlch5)
-            vsync_csv = pd.read_csv(fdir/fn/(i+'.csv'), names=[0,1,2])
-            vsync_temp = np.array(vsync_csv.loc[:,1], dtype='uint')
+            if mode == 'FrameState':
+                frame_state = pd.read_csv(fdir/fn/(i+'FrameState.csv'))
+                vsync_temp = np.array(frame_state['SyncLED'], dtype='uint')
+                elif mode == 'Bonsai':
+                vsync_csv = pd.read_csv(fdir/fn/(i+'.csv'), names=[0,1,2])
+                vsync_temp = np.array(vsync_csv.loc[:,1], dtype='uint')+1
             vsync.append(np.where((vsync_temp[1:] - vsync_temp[:-1]) ==1)[0])
        
         # arbituarily more than 10s interval would be made when concatenate ephys files.
-        # Hmmm....this may meet some problem if the file recording is stopped right after turnning off sync.
+        
         ses_e_end = esync_timestamps_load[np.where((esync_timestamps_load[1:] - esync_timestamps_load[:-1]) > 100000)[0]]
         ses_e_end = np.append(ses_e_end, esync_timestamps_load[-1])# last one sync needed here.
         esync_timestamps = [esync_timestamps_load[np.where(esync_timestamps_load < ses_e_end[0] + 100000)]]
